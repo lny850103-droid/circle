@@ -1,0 +1,62 @@
+rules_version = '2';
+
+// 무이판사판 홈페이지 Firestore 보안 규칙
+// - 공지·소개(site), 활동 계획(plans), 목표(goals): 누구나 읽고, 승인된 관리자만 수정
+// - 가입 신청서(applications): 누구나 로그인 없이 제출, 읽기·수정·삭제는 관리자만
+// - 관리자 명단(admins): 승인된 관리자만 추가·삭제
+// - 관리자 가입 요청(adminRequests): 가입한 본인이 자기 요청만 만들고, 관리자가 승인·거절
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function shortText(v, max) {
+      return v is string && v.size() <= max;
+    }
+
+    match /site/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /plans/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /goals/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /applications/{docId} {
+      allow create: if request.resource.data.keys().hasOnly(['name', 'school', 'major', 'birth', 'academic', 'origin', 'contact', 'why', 'status', 'createdAt'])
+        && shortText(request.resource.data.name, 20) && request.resource.data.name.size() > 0
+        && shortText(request.resource.data.school, 30) && request.resource.data.school.size() > 0
+        && shortText(request.resource.data.major, 30)
+        && shortText(request.resource.data.birth, 10)
+        && request.resource.data.academic in ['재학', '휴학', '취업', '취준생']
+        && request.resource.data.origin in ['북한', '남한', '제3국출신']
+        && shortText(request.resource.data.contact, 60) && request.resource.data.contact.size() > 0
+        && shortText(request.resource.data.why, 500)
+        && request.resource.data.status == 'wait'
+        && request.resource.data.createdAt is number;
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /admins/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /adminRequests/{uid} {
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'createdAt'])
+        && shortText(request.resource.data.name, 20);
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow delete: if isAdmin() || (signedIn() && request.auth.uid == uid);
+    }
+  }
+}
