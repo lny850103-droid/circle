@@ -450,7 +450,9 @@ body::before { background: #ffffff; }
 .form-join { display: grid; gap: 8px; justify-items: start; }
 .form-join .big { font-size: 1.05rem; font-weight: 800; color: var(--navy); }
 .form-join .desc { font-size: .88rem; color: var(--muted); }
-.form-join .btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 12px 20px; text-decoration: none; background: var(--yellow); color: var(--on-yellow); font-weight: 800; }</style>
+.form-join .btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 12px 20px; text-decoration: none; background: var(--yellow); color: var(--on-yellow); font-weight: 800; }
+.admin-bar { gap: 8px; } .admin-bar span { flex: 1 1 200px; }
+</style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -480,6 +482,8 @@ body::before { background: #ffffff; }
   <div class="admin-bar" id="adminBar" hidden>
     <span>관리자 모드예요. 바꾼 내용은 모든 방문자에게 바로 보여요.</span>
     <button type="button" id="editSiteBtn">사이트 정보 수정</button>
+    <button type="button" id="pwChangeBtn">비밀번호 변경</button>
+    <button type="button" id="lockBtn">잠그기</button>
   </div>
 
   <p class="status-line" id="statusLine" aria-live="polite">불러오는 중…</p>
@@ -745,6 +749,8 @@ body::before { background: #ffffff; }
     <li><a href="#join"><svg><use href="#i-pen"/></svg>가입 신청</a></li>
   </ul>
 </nav>
+
+<dialog id="pwDlg" aria-labelledby="pwTitle"><div class="dlg" id="pwBody"></div></dialog>
 
 <dialog id="siteDlg" aria-labelledby="siteDlgTitle">
   <form class="dlg form" id="siteForm" method="dialog" novalidate>
@@ -1044,6 +1050,7 @@ body::before { background: #ffffff; }
     db.collection("goals").onSnapshot(function (s) { state.goals = docsOf(s); renderGoals(); }, onErr);
     db.collection("cheers").onSnapshot(function (s) { state.cheers = s.docs.map(function (d) { return { id: d.id, data: d.data() }; }); renderGoals(); }, onErr);
     if (state.isAdmin) {
+      db.doc("secure/admin").onSnapshot(function (d) { state.secure = d.exists ? d.data() : null; state.secureLoaded = true; }, function () { state.secureLoaded = true; });
       db.collection("applications").onSnapshot(function (s) {
         state.apps = docsOf(s);
         var mine = state.apps.filter(function (a) { return a.id === state.uid; })[0] || null;
@@ -1067,7 +1074,67 @@ body::before { background: #ffffff; }
   }
 
   /* ---------- 관리자 동작 ---------- */
-  $("adminToggle").addEventListener("click", function () { state.adminMode = !state.adminMode; renderAll(); });
+  /* ---------- 관리자 비밀번호 ---------- */
+  // 비밀번호는 PBKDF2로 바꾼 값만 secure/admin 문서(관리자만 읽고 쓰는 곳)에 저장해요.
+  var PW_KEY = "muipan-admin-unlocked";
+  var pwMode = "unlock";
+  function unlocked() { try { return sessionStorage.getItem(PW_KEY) === "1"; } catch (e) { return false; } }
+  function setUnlocked(v) { try { if (v) sessionStorage.setItem(PW_KEY, "1"); else sessionStorage.removeItem(PW_KEY); } catch (e) {} }
+  function toHex(buf) { return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join(""); }
+  function fromHex(h) { var a = new Uint8Array(h.length / 2); for (var i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16); return a; }
+  async function derive(pw, salt) {
+    var key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    return toHex(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: salt, iterations: 150000, hash: "SHA-256" }, key, 256));
+  }
+  async function checkPw(pw) {
+    var s = state.secure; if (!s || !s.salt || !s.hash) return false;
+    return (await derive(pw, fromHex(s.salt))) === s.hash;
+  }
+  async function storePw(pw) {
+    var salt = crypto.getRandomValues(new Uint8Array(16));
+    await state.db.doc("secure/admin").set({ salt: toHex(salt), hash: await derive(pw, salt), iterations: 150000, updatedAt: Date.now() });
+  }
+  function openPw(mode) {
+    pwMode = mode;
+    var b = $("pwBody"), make = mode === "create", change = mode === "change";
+    b.innerHTML = '<form class="form" id="pwForm" novalidate><h2 id="pwTitle">' + (make ? "관리자 비밀번호 만들기" : change ? "관리자 비밀번호 변경" : "관리자 비밀번호") + '</h2>' +
+      '<p class="desc" style="color:var(--muted);font-size:.86rem">' + (make ? "관리자 모드를 켤 때 쓸 비밀번호를 정해 주세요. 6자 이상이에요. 운영진끼리만 공유하세요." : change ? "지금 비밀번호와 새 비밀번호를 입력해 주세요." : "관리자 모드를 켜려면 비밀번호를 입력해 주세요.") + '</p>' +
+      (make ? '' : '<label for="pwCur">' + (change ? "지금 비밀번호" : "비밀번호") + ' <span class="req">*</span><input id="pwCur" type="password" autocomplete="current-password"></label>') +
+      (make || change ? '<label for="pwNew">새 비밀번호 <span class="req">*</span><input id="pwNew" type="password" autocomplete="new-password" placeholder="6자 이상"></label><label for="pwNew2">새 비밀번호 확인 <span class="req">*</span><input id="pwNew2" type="password" autocomplete="new-password"></label>' : '') +
+      '<p class="msg" id="pwMsg" aria-live="polite"></p>' +
+      '<div class="btn-row"><button type="button" class="btn ghost" data-close>취소</button><button type="submit" class="btn">' + (make ? "만들고 켜기" : change ? "변경" : "확인") + '</button></div></form>';
+    b.querySelector("[data-close]").addEventListener("click", function () { $("pwDlg").close(); });
+    if (!$("pwDlg").open) $("pwDlg").showModal();
+    var first = b.querySelector("input"); if (first) first.focus();
+  }
+  $("pwBody").addEventListener("submit", async function (e) {
+    if (e.target.id !== "pwForm") return;
+    e.preventDefault();
+    var msg = $("pwMsg");
+    if (!state.secureLoaded) { msg.textContent = "비밀번호 정보를 불러오는 중이에요. 잠시 후 다시 눌러 주세요."; return; }
+    if (state.busy.pw) return; state.busy.pw = true;
+    try {
+      if (pwMode !== "create" && !(await checkPw($("pwCur").value))) { msg.textContent = "비밀번호가 맞지 않아요."; state.busy.pw = false; return; }
+      if (pwMode !== "unlock") {
+        var n1 = $("pwNew").value, n2 = $("pwNew2").value;
+        if (n1.length < 6) { msg.textContent = "새 비밀번호는 6자 이상이어야 해요."; state.busy.pw = false; return; }
+        if (n1 !== n2) { msg.textContent = "새 비밀번호 확인이 일치하지 않아요."; state.busy.pw = false; return; }
+        await storePw(n1);
+      }
+      $("pwDlg").close();
+      if (pwMode === "change") { toast("관리자 비밀번호를 바꿨어요."); }
+      else { setUnlocked(true); state.adminMode = true; renderAll(); toast("관리자 모드를 켰어요."); }
+    } catch (err) { msg.textContent = failMsg(err); }
+    state.busy.pw = false;
+  });
+  $("pwChangeBtn").addEventListener("click", function () { if (state.secure) openPw("change"); else openPw("create"); });
+
+  $("adminToggle").addEventListener("click", function () {
+    if (state.adminMode) { state.adminMode = false; renderAll(); return; }
+    if (unlocked() && state.secure) { state.adminMode = true; renderAll(); return; }
+    openPw(state.secureLoaded && !state.secure ? "create" : "unlock");
+  });
+  $("lockBtn").addEventListener("click", function () { setUnlocked(false); state.adminMode = false; renderAll(); toast("관리자 모드를 잠갔어요."); });
 
   $("editSiteBtn").addEventListener("click", function () {
     var s = state.site;
