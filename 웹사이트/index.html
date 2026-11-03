@@ -1036,7 +1036,9 @@ body::before { background: #ffffff; }
   }
   function renderAuth() {
     var btn = $("adminLoginBtn"); if (!btn) return;
-    btn.hidden = !state.db || state.isAdmin;
+    // Firebase를 설정하기 전에는 비밀번호로 잠긴 클로드 관리자 화면으로 보냄
+    if (!state.db) { btn.hidden = false; btn.textContent = "관리자"; $("logoutBtn").hidden = true; return; }
+    btn.hidden = state.isAdmin;
     btn.textContent = !state.uid ? "관리자 로그인" : (state.authChecked ? "승인 대기 중" : "확인 중…");
     $("logoutBtn").hidden = !state.uid;
   }
@@ -1059,7 +1061,11 @@ body::before { background: #ffffff; }
     }
     if (!$("authDlg").open) $("authDlg").showModal();
   }
-  $("adminLoginBtn").addEventListener("click", function () { openAuth(); });
+  var ADMIN_URL = "https://claude.ai/artifact/SFRQjs1jsajoigXSP9KMXJ";
+  $("adminLoginBtn").addEventListener("click", function () {
+    if (!state.db) { window.open(ADMIN_URL, "_blank", "noopener"); return; }
+    openAuth();
+  });
   $("logoutBtn").addEventListener("click", function () { if (state.auth) state.auth.signOut(); toast("로그아웃했어요."); });
   $("authBody").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-act]"); if (!b) return;
