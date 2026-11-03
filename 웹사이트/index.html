@@ -471,7 +471,9 @@ body::before { background: #ffffff; }
 .form-join { display: grid; gap: 8px; justify-items: start; }
 .form-join .big { font-size: 1.05rem; font-weight: 800; color: var(--navy); }
 .form-join .desc { font-size: .88rem; color: var(--muted); }
-.form-join .btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 12px 20px; text-decoration: none; background: var(--yellow); color: var(--on-yellow); font-weight: 800; }</style>
+.form-join .btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 12px 20px; text-decoration: none; background: var(--yellow); color: var(--on-yellow); font-weight: 800; }
+.admin-bar { gap: 8px; } .admin-bar span { flex: 1 1 200px; }
+</style>
 
 </head>
 <body>
@@ -506,6 +508,7 @@ body::before { background: #ffffff; }
   <div class="admin-bar" id="adminBar" hidden>
     <span>관리자 모드예요. 바꾼 내용은 모든 방문자에게 바로 보여요.</span>
     <button type="button" id="editSiteBtn">사이트 정보 수정</button>
+    <button type="button" id="fbPwBtn">비밀번호 변경</button>
   </div>
 
   <p class="status-line" id="statusLine" aria-live="polite">불러오는 중…</p>
@@ -1057,7 +1060,7 @@ body::before { background: #ffffff; }
         (signup ? '<label for="auPw2">비밀번호 확인 <span class="req">*</span><input id="auPw2" type="password" autocomplete="new-password"></label>' : '') +
         '<p class="msg" id="authMsg" aria-live="polite"></p>' +
         '<div class="btn-row"><button type="button" class="btn ghost" data-act="close">취소</button><button type="submit" class="btn">' + (signup ? "가입 요청" : "로그인") + '</button></div>' +
-        '<p class="auth-switch">' + (signup ? '이미 가입하셨나요? <button type="button" data-act="toLogin">로그인</button>' : '처음이신가요? <button type="button" data-act="toSignup">관리자 가입</button>') + '</p></form>';
+        '<p class="auth-switch">' + (signup ? '이미 가입하셨나요? <button type="button" data-act="toLogin">로그인</button>' : '처음이신가요? <button type="button" data-act="toSignup">관리자 가입</button> · <button type="button" data-act="toReset">비밀번호 찾기</button>') + '</p></form>';
     }
     if (!$("authDlg").open) $("authDlg").showModal();
   }
@@ -1066,6 +1069,55 @@ body::before { background: #ffffff; }
     if (!state.db) { window.open(ADMIN_URL, "_blank", "noopener"); return; }
     openAuth();
   });
+  /* ---------- 관리자 비밀번호 변경·찾기 (Firebase) ---------- */
+  var fbPwMode = "change";
+  function fbPwErr(e) {
+    var c = (e && e.code) || "";
+    if (c === "auth/wrong-password" || c === "auth/invalid-credential" || c === "auth/invalid-login-credentials") return "지금 비밀번호가 맞지 않아요.";
+    if (c === "auth/requires-recent-login") return "보안을 위해 로그아웃 후 다시 로그인한 뒤 바꿔 주세요.";
+    return authErr(e);
+  }
+  function openFbPw(mode) {
+    fbPwMode = mode;
+    var reset = mode === "reset";
+    $("authBody").innerHTML = '<form class="form" id="fbPwForm" novalidate><h2 id="authTitle">' + (reset ? "비밀번호 찾기" : "비밀번호 변경") + '</h2>' +
+      (reset
+        ? '<p class="desc" style="color:var(--muted);font-size:.86rem">가입한 이메일을 넣으면 비밀번호를 새로 정할 수 있는 메일을 보내 드려요.</p>' +
+          '<label for="fpEmail">이메일 <span class="req">*</span><input id="fpEmail" type="email" autocomplete="email"></label>'
+        : '<label for="fpCur">지금 비밀번호 <span class="req">*</span><input id="fpCur" type="password" autocomplete="current-password"></label>' +
+          '<label for="fpNew">새 비밀번호 <span class="req">*</span><input id="fpNew" type="password" autocomplete="new-password" placeholder="6자 이상"></label>' +
+          '<label for="fpNew2">새 비밀번호 확인 <span class="req">*</span><input id="fpNew2" type="password" autocomplete="new-password"></label>') +
+      '<p class="msg" id="fpMsg" aria-live="polite"></p>' +
+      '<div class="btn-row"><button type="button" class="btn ghost" data-act="close">닫기</button><button type="submit" class="btn">' + (reset ? "메일 보내기" : "변경") + '</button></div>' +
+      (reset ? '<p class="auth-switch"><button type="button" data-act="toLogin">로그인으로 돌아가기</button></p>' : '') + '</form>';
+    if (!$("authDlg").open) $("authDlg").showModal();
+  }
+  $("fbPwBtn").addEventListener("click", function () { openFbPw("change"); });
+  $("authBody").addEventListener("submit", async function (e) {
+    if (e.target.id !== "fbPwForm") return;
+    e.preventDefault();
+    var msg = $("fpMsg");
+    if (state.busy.fbpw) return; state.busy.fbpw = true;
+    try {
+      if (fbPwMode === "reset") {
+        var em = $("fpEmail").value.trim();
+        if (!em) { msg.textContent = "이메일을 입력해 주세요."; state.busy.fbpw = false; return; }
+        await state.auth.sendPasswordResetEmail(em);
+        msg.style.color = "var(--green)";
+        msg.textContent = "가입된 이메일이면 재설정 메일이 가요. 메일의 링크에서 새 비밀번호를 정해 주세요.";
+      } else {
+        var u = state.auth.currentUser, cur = $("fpCur").value, n1 = $("fpNew").value, n2 = $("fpNew2").value;
+        if (!u) { msg.textContent = "먼저 로그인해 주세요."; state.busy.fbpw = false; return; }
+        if (n1.length < 6) { msg.textContent = "새 비밀번호는 6자 이상이어야 해요."; state.busy.fbpw = false; return; }
+        if (n1 !== n2) { msg.textContent = "새 비밀번호 확인이 일치하지 않아요."; state.busy.fbpw = false; return; }
+        await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email, cur));
+        await u.updatePassword(n1);
+        $("authDlg").close();
+        toast("비밀번호를 바꿨어요.");
+      }
+    } catch (err) { msg.style.color = ""; msg.textContent = fbPwErr(err); }
+    state.busy.fbpw = false;
+  });
   $("logoutBtn").addEventListener("click", function () { if (state.auth) state.auth.signOut(); toast("로그아웃했어요."); });
   $("authBody").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-act]"); if (!b) return;
@@ -1073,6 +1125,7 @@ body::before { background: #ffffff; }
     if (act === "close") $("authDlg").close();
     if (act === "toSignup") openAuth("signup");
     if (act === "toLogin") openAuth("login");
+    if (act === "toReset") openFbPw("reset");
     if (act === "logout") { state.auth.signOut(); $("authDlg").close(); toast("로그아웃했어요."); }
   });
   $("authBody").addEventListener("submit", async function (e) {
